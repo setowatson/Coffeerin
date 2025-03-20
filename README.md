@@ -25,11 +25,19 @@
 ## プロジェクト構造
 
 ```
-coffee-journal/
-├── app/                 # Next.js 13+ App Router
-├── components/          # Reactコンポーネント
-├── lib/                 # ユーティリティ関数
-├── hooks/              # カスタムフック
-├── public/             # 静的ファイル
-└── styles/             # グローバルスタイル
+.
+├── app/                 # Next.jsのアプリケーションコード
+├── components/         # 共通コンポーネント
+├── docs/              # ドキュメント
+├── hooks/             # カスタムフック
+├── lib/               # ユーティリティ関数
+├── public/            # 静的ファイル
+├── styles/            # スタイルシート
+├── .env.local         # 環境変数
+├── .gitignore         # Gitの除外設定
+├── next.config.mjs    # Next.js設定
+├── package.json       # 依存パッケージ
+├── postcss.config.mjs # PostCSS設定
+├── tailwind.config.ts # Tailwind CSS設定
+└── tsconfig.json      # TypeScript設定
 ```

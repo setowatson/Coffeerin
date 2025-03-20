@@ -2,12 +2,14 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { format } from "date-fns"
 import { CalendarIcon, MapPin, Upload, Coffee, Tag } from "lucide-react"
+import { useRouter } from 'next/navigation'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 
 import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
@@ -22,6 +24,16 @@ import { cn } from "@/lib/utils"
 import { CoffeeRating } from "@/components/coffee-rating"
 import type { CoffeeEntry } from "@/components/coffee-app"
 import { MapSearch } from "@/components/map-search"
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import Image from 'next/image'
+import {
+  CoffeeType,
+  BrewMethod,
+  RoastLevel,
+  COFFEE_TYPE_LABELS,
+  BREW_METHOD_LABELS,
+  ROAST_LEVEL_LABELS,
+} from '@/types/coffee'
 
 const formSchema = z.object({
   name: z.string().min(1, {
@@ -52,30 +64,36 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>
 
 interface CoffeeEntryFormProps {
-  onSubmit: (entry: Omit<CoffeeEntry, "id" | "user" | "likes" | "hasLiked" | "comments">) => void
+  initialData?: any;
+  isEdit?: boolean;
 }
 
-export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
+export default function CoffeeEntryForm({ initialData, isEdit = false }: CoffeeEntryFormProps) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
+  const supabase = createClientComponentClient()
+
   const [imagePreview, setImagePreview] = useState<string | null>(null)
-  const [tags, setTags] = useState<string[]>([])
+  const [tags, setTags] = useState<string[]>(initialData?.tags || [])
   const [tagInput, setTagInput] = useState("")
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: "",
-      coffeeType: "",
-      brewMethod: "",
-      roastLevel: "",
-      location: "",
-      placeId: "",
-      rating: 3,
-      acidity: 3,
-      sweetness: 3,
-      bitterness: 3,
-      body: 3,
-      date: new Date(),
-      comment: "",
+      name: initialData?.name || "",
+      coffeeType: initialData?.coffee_type || "SINGLE_ORIGIN",
+      brewMethod: initialData?.brew_method || "DRIP",
+      roastLevel: initialData?.roast_level || "MEDIUM",
+      location: initialData?.location || "",
+      placeId: initialData?.placeId || "",
+      rating: initialData?.rating || 3,
+      acidity: initialData?.acidity || 3,
+      sweetness: initialData?.sweetness || 3,
+      bitterness: initialData?.bitterness || 3,
+      body: initialData?.body || 3,
+      date: initialData?.tasting_date ? new Date(initialData.tasting_date) : new Date(),
+      comment: initialData?.comment || "",
     },
   })
 
@@ -92,6 +110,10 @@ export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
 
   const addTag = () => {
     if (tagInput.trim() && !tags.includes(tagInput.trim())) {
+      if (tags.length >= 10) {
+        setError('タグは最大10個までです。')
+        return
+      }
       setTags([...tags, tagInput.trim()])
       setTagInput("")
     }
@@ -113,27 +135,107 @@ export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
     form.setValue("placeId", place.placeId)
   }
 
-  const handleSubmit = (values: FormValues) => {
-    onSubmit({
-      name: values.name,
-      coffeeType: values.coffeeType,
-      brewMethod: values.brewMethod,
-      roastLevel: values.roastLevel,
-      location: values.location,
-      placeId: values.placeId,
-      rating: values.rating,
-      tasteProfile: {
-        acidity: values.acidity,
-        sweetness: values.sweetness,
-        bitterness: values.bitterness,
-        body: values.body,
-      },
-      tags: tags,
-      date: format(values.date, "yyyy-MM-dd"),
-      comment: values.comment,
-      image: imagePreview || undefined,
-      isFavorite: false,
-    })
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setLoading(true)
+    setError(null)
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('認証エラー')
+
+      const coffeeData = {
+        user_id: user.id,
+        name: form.getValues("name"),
+        coffee_type: form.getValues("coffeeType"),
+        brew_method: form.getValues("brewMethod"),
+        roast_level: form.getValues("roastLevel"),
+        tasting_date: format(form.getValues("date"), "yyyy-MM-dd"),
+        rating: form.getValues("rating"),
+        acidity: form.getValues("acidity"),
+        sweetness: form.getValues("sweetness"),
+        bitterness: form.getValues("bitterness"),
+        body: form.getValues("body"),
+        comment: form.getValues("comment"),
+      }
+
+      let coffeeEntryId
+      if (isEdit && initialData?.id) {
+        const { error: updateError } = await supabase
+          .from('coffee_entries')
+          .update(coffeeData)
+          .eq('id', initialData.id)
+
+        if (updateError) throw updateError
+        coffeeEntryId = initialData.id
+      } else {
+        const { data: newEntry, error: insertError } = await supabase
+          .from('coffee_entries')
+          .insert(coffeeData)
+          .select('id')
+          .single()
+
+        if (insertError) throw insertError
+        coffeeEntryId = newEntry.id
+      }
+
+      // 画像の関連付け
+      if (imagePreview) {
+        const { error: imageError } = await supabase
+          .from('coffee_images')
+          .insert({
+            coffee_entry_id: coffeeEntryId,
+            image_url: imagePreview,
+          })
+
+        if (imageError) throw imageError
+      }
+
+      // タグの関連付け
+      const tagIds = await Promise.all(
+        tags.map(async (tagName) => {
+          // タグが存在するか確認
+          const { data: existingTags } = await supabase
+            .from('tags')
+            .select('id')
+            .eq('name', tagName)
+            .single()
+
+          if (existingTags) {
+            return existingTags.id
+          }
+
+          // 新しいタグを作成
+          const { data: newTag, error: tagError } = await supabase
+            .from('tags')
+            .insert({ name: tagName })
+            .select('id')
+            .single()
+
+          if (tagError) throw tagError
+          return newTag.id
+        })
+      )
+
+      if (tagIds.length > 0) {
+        const tagData = tagIds.map(tagId => ({
+          coffee_entry_id: coffeeEntryId,
+          tag_id: tagId
+        }))
+
+        const { error: tagLinkError } = await supabase
+          .from('coffee_tags')
+          .insert(tagData)
+
+        if (tagLinkError) throw tagLinkError
+      }
+
+      router.push('/coffee')
+    } catch (error) {
+      setError('コーヒー記録の保存に失敗しました。')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -173,7 +275,7 @@ export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
       </div>
 
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-4">
             <h3 className="text-lg font-medium flex items-center">
               <Coffee className="mr-2 h-5 w-5" />
@@ -208,11 +310,9 @@ export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="single_origin">シングルオリジン</SelectItem>
-                        <SelectItem value="blend">ブレンド</SelectItem>
-                        <SelectItem value="espresso">エスプレッソ</SelectItem>
-                        <SelectItem value="decaf">カフェインレス</SelectItem>
-                        <SelectItem value="other">その他</SelectItem>
+                        {Object.entries(COFFEE_TYPE_LABELS).map(([value, label]) => (
+                          <SelectItem key={value} value={value}>{label}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -233,14 +333,9 @@ export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="drip">ドリップ</SelectItem>
-                        <SelectItem value="french_press">フレンチプレス</SelectItem>
-                        <SelectItem value="aeropress">エアロプレス</SelectItem>
-                        <SelectItem value="espresso_machine">エスプレッソマシン</SelectItem>
-                        <SelectItem value="pour_over">ハンドドリップ</SelectItem>
-                        <SelectItem value="cold_brew">水出し</SelectItem>
-                        <SelectItem value="siphon">サイフォン</SelectItem>
-                        <SelectItem value="other">その他</SelectItem>
+                        {Object.entries(BREW_METHOD_LABELS).map(([value, label]) => (
+                          <SelectItem key={value} value={value}>{label}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -262,11 +357,9 @@ export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="light">ライトロースト</SelectItem>
-                      <SelectItem value="medium_light">ミディアムライトロースト</SelectItem>
-                      <SelectItem value="medium">ミディアムロースト</SelectItem>
-                      <SelectItem value="medium_dark">ミディアムダークロースト</SelectItem>
-                      <SelectItem value="dark">ダークロースト</SelectItem>
+                      {Object.entries(ROAST_LEVEL_LABELS).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>{label}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -493,8 +586,14 @@ export function CoffeeEntryForm({ onSubmit }: CoffeeEntryFormProps) {
             )}
           />
 
-          <Button type="submit" className="w-full">
-            投稿する
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          <Button type="submit" className="w-full" disabled={loading}>
+            {loading ? '保存中...' : isEdit ? '更新' : '記録する'}
           </Button>
         </form>
       </Form>
